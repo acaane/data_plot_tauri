@@ -4,4 +4,3 @@
 fn main() {
     data_plot_tauri_lib::run()
 }
-

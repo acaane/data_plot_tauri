@@ -5,26 +5,29 @@ import { error } from 'echarts/types/src/util/log.js';
 
 <template>
     <div class="container">
+        <h1 class="page-title">平车日志可视化</h1>
         <div class="header">
-            <h1>平车日志可视化</h1>
             <div class="controls">
                 <input
                     v-model="logPath"
-                    placeholder="请输入日志文件路径"
+                    placeholder="请输入或选择日志文件路径"
                     class="path-input"
                 />
+                <button @click="selectFile" :disabled="selecting">
+                    {{ selecting ? "选择中..." : "选择文件" }}
+                </button>
                 <button @click="loadData" :disabled="loading">
                     {{ loading ? '加载中...' : '加载数据' }}
                 </button>
             </div>
 
-            <div class="chart-container">
-                <div ref="chart" class="chart"></div>
-            </div>
-
             <div v-if="errMsg" class="error">
                 {{ errMsg }}
             </div>
+        </div>
+
+        <div class="chart-container">
+            <div ref="chart" class="chart"></div>
         </div>
     </div>
 </template>
@@ -33,17 +36,38 @@ import { error } from 'echarts/types/src/util/log.js';
 import { ref, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog';
 
 const chart = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 
 const logPath = ref('D:/project/pingche_jingtang/data/log/2025.10.31/pingche_log.5.log')
 const loading = ref(false)
+const selecting = ref(false)
 const errMsg = ref('')
 
 // 转换ISO时间字符串为时间戳
 function parseTime(time: string): number {
     return new Date(time).getTime()
+}
+
+// 选择文件
+async function selectFile() {
+    try {
+        const selected = await open({
+            filters: [{
+                name: '日志',
+                extensions: ['*']
+            }],
+            multiple: false
+        })
+        if (selected && typeof selected === 'string') {
+            logPath.value = selected
+            selecting.value = false
+        }
+    } catch (e: any) {
+        errMsg.value = `选择文件失败:${e.message}`
+    }
 }
 
 // 加载并渲染数据
@@ -72,16 +96,14 @@ async function loadData() {
         // 转换为ECharts系列数据
         const series = Object.entries(data).map(([trainNum, records]) => {
             // 按时间排序
-            const sortedRecords = [...records].sort((a, b) => 
-                parseTime(a.time) - parseTime(b.time))
+            const sortedRecords = records
+                .map((record: any) => [parseTime(record.time), Number(record.head)] as [number, number])
+                .sort((a, b) => a[0] - b[0])
 
             return {
                 name: `车厢${trainNum}`,
                 type: 'line',
-                data: sortedRecords.map((record: any) => [
-                    parseTime(record.time),
-                    record.pos  // 使用pos作为y轴数据
-                ]),
+                data: sortedRecords,
                 smooth: true,
                 showSymbol: false,
                 emphasis: {
@@ -99,8 +121,8 @@ async function loadData() {
                 text: '车厢位置-时间曲线',
                 left: 'center',
                 textStyle: {
-                fontSize: 20,
-                fontWeight: 'bold'
+                    fontSize: 20,
+                    fontWeight: 'bold'
                 }
             },
             tooltip: {
@@ -283,33 +305,38 @@ onUnmounted(() => {
 
 <style scoped>
 .container {
-  padding: 20px;
-  height: 100vh;
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  padding: 20px;
   box-sizing: border-box;
 }
 
+.page-title {
+  margin: 0 0 20px 0;
+  font-size: 35px;
+  font-weight: 600;
+  text-align: center;        /* 文字水平居中 */
+  width: 100%;
+  color: #333;
+}
+
 .header {
+  width: 100%;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
   margin-bottom: 20px;
   padding-bottom: 15px;
   border-bottom: 1px solid #e0e0e0;
 }
 
-.header h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: #333;
-}
-
 .controls {
   display: flex;
   gap: 10px;
   align-items: center;
+  justify-content: center;
+  width: 100%;
 }
 
 .path-input {
@@ -347,9 +374,9 @@ button:disabled {
 }
 
 .chart-container {
-  flex: 1;
-  min-height: 0;
-  position: relative;
+  width: 100%;
+  height: 100%;      /* 父级必须有高度 */
+  min-height: 400px; /* 兜底 */
 }
 
 .chart {
@@ -358,7 +385,7 @@ button:disabled {
 }
 
 .error {
-  margin-top: 15px;
+  margin-top: 8px;
   padding: 12px;
   background-color: #fef0f0;
   border: 1px solid #fbc4c4;
