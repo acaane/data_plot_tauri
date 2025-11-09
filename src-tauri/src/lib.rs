@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::{collections::HashMap, fs::File, io::Read, time::Instant};
+use std::{collections::HashMap, fs::File, io::Read};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ struct TrainInfo {
 
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+    format!("Hello, {name}! You've been greeted from Rust!")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,7 +31,6 @@ pub fn run() {
 
 #[tauri::command]
 fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
-    let mut now = Instant::now();
     let mut file = File::open(&path).map_err(|e| e.to_string())?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
@@ -60,7 +59,7 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
                         || word.contains("pos")
                     {
                         let (k, v) = word.split_once(':')?;
-                        return Some((k.to_string(), v.to_string()));
+                        Some((k.to_string(), v.to_string()))
                     } else {
                         None
                     }
@@ -72,11 +71,9 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
             data.entry(number).or_insert(Vec::new()).push(words);
         }
     }
-    println!("分析日志所需时间:{:?}", now.elapsed());
 
     // info!("all data: {data:#?}");
 
-    now = Instant::now();
     // 显示数据
     let train_data = data
         .into_iter()
@@ -117,7 +114,6 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
-    println!("生成数据所需时间:{:?}", now.elapsed());
     Ok(train_data)
 }
 
@@ -127,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_parse_data() {
-        let path = "D:/project/pingche_jingtang/data/log/2025.10.31/pingche_log.5.log".to_string();
+        let path = "../test_files/2025.10.31/pingche_log.5.log".to_string();
         let data = parse_data(path).unwrap();
 
         assert!(!data.is_empty());
