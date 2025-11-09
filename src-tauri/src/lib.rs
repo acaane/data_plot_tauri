@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{collections::HashMap, fs::File, io::Read, time::Instant};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,7 @@ pub fn run() {
 
 #[tauri::command]
 fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
+    let mut now = Instant::now();
     let mut file = File::open(&path).map_err(|e| e.to_string())?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
@@ -71,9 +72,11 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
             data.entry(number).or_insert(Vec::new()).push(words);
         }
     }
+    println!("分析日志所需时间:{:?}", now.elapsed());
 
     // info!("all data: {data:#?}");
 
+    now = Instant::now();
     // 显示数据
     let train_data = data
         .into_iter()
@@ -114,7 +117,7 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
-    println!("train data len: {}", train_data.len());
+    println!("生成数据所需时间:{:?}", now.elapsed());
     Ok(train_data)
 }
 
