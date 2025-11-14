@@ -24,4 +24,4 @@ dist-ssr
 *.sw?
 
 # Test files
-test_log
+test_files

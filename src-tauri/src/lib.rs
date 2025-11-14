@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{collections::HashMap, fs::{self, File}, io::Read};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,13 +43,13 @@ fn parse_data(path: String) -> Result<HashMap<String, Vec<TrainInfo>>, String> {
             && line.contains("number")
         {
             // 先解析时间
-            let (time, other) = line
+            let (time, message) = line
                 .strip_prefix('[')
                 .and_then(|s| s.split_once(']'))
                 .ok_or("invalid line format")?;
 
             // 再解析其他所需字段
-            let mut words = other
+            let mut words = message
                 .split_whitespace()
                 .filter_map(|word| {
                     if word.contains("head")
@@ -128,6 +128,14 @@ mod tests {
 
         assert!(!data.is_empty());
     }
+
+    #[test]
+    fn test_parse_mupian_data() {
+        let path = "../test_files/2025.11.13/unload_log2025.11.13.log".to_string();
+        let data = parse_mupian_data(path).unwrap();
+
+        assert!(!data.is_empty());
+    }
 }
 
 fn parse_time(time: &str) -> Result<DateTime<Utc>, String> {
@@ -135,4 +143,137 @@ fn parse_time(time: &str) -> Result<DateTime<Utc>, String> {
         .map_err(|_| "failed to parse time")?;
 
     Ok(DateTime::from_naive_utc_and_offset(native_time, Utc))
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct CpuInfo {
+    time: DateTime<Utc>,
+    cpu_usage: f32,
+    mem_usage: f32,
+    mem_used: f32,
+}
+
+impl CpuInfo {
+    fn new() -> Self {
+        Self {
+            time: Utc::now(),
+            cpu_usage: 0.0,
+            mem_usage: 0.0,
+            mem_used: 0.0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct DirectionMismatchInfo {
+    time: DateTime<Utc>,
+    direction: i32,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ReplenishInfo {
+    time: DateTime<Utc>,
+    // checked: Option<String>,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct MupianInfo {
+    cpu_info: Option<CpuInfo>,
+    direction_mismatch_info: Option<DirectionMismatchInfo>,
+    replenish_info: Option<ReplenishInfo>,
+}
+
+impl MupianInfo {
+    fn new() -> Self {
+        Self {
+            cpu_info: None,
+            direction_mismatch_info: None,
+            replenish_info: None,
+        }
+    }
+}
+
+#[tauri::command]
+fn parse_mupian_data(path: String) -> Result<HashMap<String, Vec<MupianInfo>>, String> {
+    let mut file= File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+
+    let mut data = HashMap::new();
+    data.insert("".to_string(), vec![MupianInfo::new()]);
+    let direction_mismatch_chekced = false;
+    let replenish_info_written = "";
+
+    let mut cpu_info = None;
+    let mut direction_mismatch_info = None;
+    let mut replenish_info = None;
+
+    for line in buf.lines().take(1000) {
+        if line.contains("cpu usage")
+            || (line.contains("unload direction") && line.contains("match with"))
+            || line.contains("send replenish finish")
+        {
+            let parts = line.splitn(4, ']').collect::<Vec<_>>();
+            let time = parts[0].strip_prefix('[').ok_or("Missing time in line")?.trim();
+            let _level = parts[1].strip_prefix(" [").ok_or("Missing level in line")?.trim();
+            let name = parts[2].strip_prefix(" [").ok_or("Missing name in line")?.trim();
+            let message = parts[3].trim();
+
+            let mupian_info = 
+            if message.contains("cpu usage") {
+                let cpu_info = parse_cpu_info(message)?;
+                (Some(cpu_info), None, None)
+            } else if message.contains("unload direction") {
+                (None, None, None)
+            } else {
+                (None, None, None)
+            };
+
+        }
+    }
+
+    Ok(data)    
+}
+
+fn parse_cpu_info(message: &str) -> Result<CpuInfo, String> {
+    let mut parts = message.split(", ");
+    let mut parse = |suffix: &str| {
+        parts
+           .next()
+           .and_then(|s| s.split_once(':').map(|(_, v)| v.trim_end_matches(suffix)))
+           .and_then(|v| v.parse::<f32>().ok()).ok_or("parse cpu info failed")
+    };
+
+    let cpu_usage = parse("%")?;
+    let mem_usage = parse("%")?;
+    let _total = parts.next()?;  // 不需要总内存数据，直接丢弃
+    let mem_used = parse("MB")?;
+
+    Ok(CpuInfo {
+        time: Utc::now(),
+        cpu_usage,
+        mem_usage,
+        mem_used,
+    })
+}
+
+fn parse_direction_mismatch_info(message: &str) -> Result<DirectionMismatchInfo, String> {
+    let direction = message
+        .strip_prefix("unload direction ")
+        .map(|s| {
+            let word = s.split_whitespace();
+            word
+                .next()
+                // .ok_or(format!("no word in: {message}"))?
+                .and_then(|s| s.parse::<i32>().map_err(|e| e.to_string()))
+        });
+    // let name = direction == 
+    
+    // Ok(DirectionMismatchInfo {
+    //     time: Utc::now(),
+    //     direction: direction?,
+    //     name: 
+    // })
 }
