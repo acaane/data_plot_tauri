@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::{collections::HashMap, fs::{self, File}, io::Read};
+use std::{collections::HashMap, fs::File, io::Read};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,8 @@ mod tests {
         let path = "../test_files/2025.11.13/unload_log2025.11.13.log".to_string();
         let data = parse_mupian_data(path).unwrap();
 
+        println!("data: {data:#?}");
+
         assert!(!data.is_empty());
     }
 }
@@ -145,7 +147,7 @@ fn parse_time(time: &str) -> Result<DateTime<Utc>, String> {
     Ok(DateTime::from_naive_utc_and_offset(native_time, Utc))
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct CpuInfo {
     time: DateTime<Utc>,
     cpu_usage: f32,
@@ -153,28 +155,17 @@ struct CpuInfo {
     mem_used: f32,
 }
 
-impl CpuInfo {
-    fn new() -> Self {
-        Self {
-            time: Utc::now(),
-            cpu_usage: 0.0,
-            mem_usage: 0.0,
-            mem_used: 0.0,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 struct DirectionMismatchInfo {
     time: DateTime<Utc>,
-    direction: i32,
+    result: bool,
     name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ReplenishInfo {
     time: DateTime<Utc>,
-    // checked: Option<String>,
+    result: bool,
     name: String,
 }
 
@@ -197,83 +188,119 @@ impl MupianInfo {
 
 #[tauri::command]
 fn parse_mupian_data(path: String) -> Result<HashMap<String, Vec<MupianInfo>>, String> {
-    let mut file= File::open(path).map_err(|e| e.to_string())?;
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
 
     let mut data = HashMap::new();
-    data.insert("".to_string(), vec![MupianInfo::new()]);
-    let direction_mismatch_chekced = false;
-    let replenish_info_written = "";
 
-    let mut cpu_info = None;
-    let mut direction_mismatch_info = None;
-    let mut replenish_info = None;
-
-    for line in buf.lines().take(1000) {
+    for line in buf.lines().skip(700).take(200) {
         if line.contains("cpu usage")
             || (line.contains("unload direction") && line.contains("match with"))
             || line.contains("send replenish finish")
         {
             let parts = line.splitn(4, ']').collect::<Vec<_>>();
-            let time = parts[0].strip_prefix('[').ok_or("Missing time in line")?.trim();
-            let _level = parts[1].strip_prefix(" [").ok_or("Missing level in line")?.trim();
-            let name = parts[2].strip_prefix(" [").ok_or("Missing name in line")?.trim();
+            let time = parts[0]
+                .strip_prefix('[')
+                .ok_or("Missing time in line")?
+                .trim();
+            let _level = parts[1]
+                .strip_prefix(" [")
+                .ok_or("Missing level in line")?
+                .trim();
+            let name = parts[2]
+                .strip_prefix(" [")
+                .ok_or("Missing name in line")?
+                .trim();
             let message = parts[3].trim();
 
-            let mupian_info = 
-            if message.contains("cpu usage") {
-                let cpu_info = parse_cpu_info(message)?;
-                (Some(cpu_info), None, None)
+            let mupian_info = if message.contains("cpu usage") {
+                let cpu_info = parse_cpu_info(message, time)?;
+                MupianInfo {
+                    cpu_info: Some(cpu_info),
+                    direction_mismatch_info: None,
+                    replenish_info: None,
+                }
             } else if message.contains("unload direction") {
-                (None, None, None)
+                let direction_mismatch_info = parse_direction_mismatch_info(message, time, name)?;
+                MupianInfo {
+                    cpu_info: None,
+                    direction_mismatch_info: Some(direction_mismatch_info),
+                    replenish_info: None,
+                }
             } else {
-                (None, None, None)
+                let replenish_info = parse_replenish_info(message, time, name)?;
+                MupianInfo {
+                    cpu_info: None,
+                    direction_mismatch_info: None,
+                    replenish_info: Some(replenish_info),
+                }
             };
 
+            data.entry(name.to_string())
+                .or_insert(Vec::new())
+                .push(mupian_info);
         }
     }
 
-    Ok(data)    
+    Ok(data)
 }
 
-fn parse_cpu_info(message: &str) -> Result<CpuInfo, String> {
-    let mut parts = message.split(", ");
-    let mut parse = |suffix: &str| {
+fn parse_cpu_info(message: &str, time: &str) -> Result<CpuInfo, String> {
+    let mut parts = message.split(',');
+    let parse = |parts: &mut std::str::Split<char>, suffix: &str| {
         parts
-           .next()
-           .and_then(|s| s.split_once(':').map(|(_, v)| v.trim_end_matches(suffix)))
-           .and_then(|v| v.parse::<f32>().ok()).ok_or("parse cpu info failed")
+            .next()
+            .and_then(|s| {
+                s.split_once(':')
+                    .map(|(_, v)| v.trim().trim_end_matches(suffix))
+            })
+            .and_then(|v| v.parse::<f32>().ok())
     };
 
-    let cpu_usage = parse("%")?;
-    let mem_usage = parse("%")?;
-    let _total = parts.next()?;  // 不需要总内存数据，直接丢弃
-    let mem_used = parse("MB")?;
+    let cpu_usage = parse(&mut parts, "%").ok_or("parse cpu usage failed")?; // 第 1 段
+    let mem_usage = parse(&mut parts, "%").ok_or("parse mem usage failed")?; // 第 2 段
+    let _total = parts.next(); // 第 3 段直接丢弃
+    let mem_used = parse(&mut parts, "MB").ok_or("parse mem used failed")?; // 第 4 段
 
     Ok(CpuInfo {
-        time: Utc::now(),
+        time: parse_time(time)?,
         cpu_usage,
         mem_usage,
         mem_used,
     })
 }
 
-fn parse_direction_mismatch_info(message: &str) -> Result<DirectionMismatchInfo, String> {
+fn parse_direction_mismatch_info(
+    message: &str,
+    time: &str,
+    name: &str,
+) -> Result<DirectionMismatchInfo, String> {
     let direction = message
         .strip_prefix("unload direction ")
-        .map(|s| {
-            let word = s.split_whitespace();
-            word
+        .and_then(|s| {
+            s.split_whitespace()
                 .next()
-                // .ok_or(format!("no word in: {message}"))?
-                .and_then(|s| s.parse::<i32>().map_err(|e| e.to_string()))
-        });
-    // let name = direction == 
-    
-    // Ok(DirectionMismatchInfo {
-    //     time: Utc::now(),
-    //     direction: direction?,
-    //     name: 
-    // })
+                .and_then(|s| s.parse::<i32>().ok())
+        })
+        .ok_or("parse direction failed")?;
+
+    Ok(DirectionMismatchInfo {
+        time: parse_time(time)?,
+        result: direction > 0,
+        name: name.to_string(),
+    })
+}
+
+fn parse_replenish_info(message: &str, time: &str, name: &str) -> Result<ReplenishInfo, String> {
+    let result = message
+        .split_whitespace()
+        .last()
+        .ok_or("parse replenish info result failed")?;
+
+    Ok(ReplenishInfo {
+        time: parse_time(time)?,
+        result: result == "success",
+        name: name.to_string(),
+    })
 }
