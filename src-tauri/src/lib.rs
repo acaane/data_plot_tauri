@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::{collections::HashMap, fs::File, io::Read};
+use std::{collections::HashMap, fs::File, io::Read, vec};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, parse_data,])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            parse_data,
+            parse_mupian_data,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -147,9 +151,8 @@ fn parse_time(time: &str) -> Result<DateTime<Utc>, String> {
     Ok(DateTime::from_naive_utc_and_offset(native_time, Utc))
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug)]
 struct CpuInfo {
-    time: DateTime<Utc>,
     cpu_usage: f32,
     mem_usage: f32,
     mem_used: f32,
@@ -157,42 +160,56 @@ struct CpuInfo {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct DirectionMismatchInfo {
-    time: DateTime<Utc>,
     result: bool,
     name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ReplenishInfo {
-    time: DateTime<Utc>,
     result: bool,
     name: String,
 }
 
+// #[derive(Serialize, Deserialize, Debug)]
+// struct MupianInfo {
+//     time: DateTime<Utc>,
+//     cpu_info: Option<CpuInfo>,
+//     direction_mismatch_info: Option<DirectionMismatchInfo>,
+//     replenish_info: Option<ReplenishInfo>,
+// }
+
+// impl MupianInfo {
+//     fn new() -> Self {
+//         Self {
+//             time: Utc::now(),
+//             cpu_info: None,
+//             direction_mismatch_info: None,
+//             replenish_info: None,
+//         }
+//     }
+// }
+
 #[derive(Serialize, Deserialize, Debug)]
-struct MupianInfo {
-    cpu_info: Option<CpuInfo>,
-    direction_mismatch_info: Option<DirectionMismatchInfo>,
-    replenish_info: Option<ReplenishInfo>,
+enum MupianType {
+    CpuInfoTpye(CpuInfo),
+    DirectionMismatchInfoTpye(DirectionMismatchInfo),
+    ReplenishInfoTpye(ReplenishInfo),
 }
 
-impl MupianInfo {
-    fn new() -> Self {
-        Self {
-            cpu_info: None,
-            direction_mismatch_info: None,
-            replenish_info: None,
-        }
-    }
+#[derive(Serialize, Deserialize, Debug)]
+struct MupianInfo {
+    time: DateTime<Utc>,
+    mupian_type: MupianType,
 }
 
 #[tauri::command]
-fn parse_mupian_data(path: String) -> Result<HashMap<String, Vec<MupianInfo>>, String> {
+// fn parse_mupian_data(path: String) -> Result<HashMap<String, Vec<MupianInfo>>, String> {
+fn parse_mupian_data(path: String) -> Result<Vec<MupianInfo>, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut buf = String::new();
     file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
 
-    let mut data = HashMap::new();
+    let mut data = Vec::new();
 
     for line in buf.lines().skip(700).take(200) {
         if line.contains("cpu usage")
@@ -214,39 +231,33 @@ fn parse_mupian_data(path: String) -> Result<HashMap<String, Vec<MupianInfo>>, S
                 .trim();
             let message = parts[3].trim();
 
-            let mupian_info = if message.contains("cpu usage") {
-                let cpu_info = parse_cpu_info(message, time)?;
-                MupianInfo {
-                    cpu_info: Some(cpu_info),
-                    direction_mismatch_info: None,
-                    replenish_info: None,
-                }
+            let mupian_type = if message.contains("cpu usage") {
+                let cpu_info = parse_cpu_info(message)?;
+                MupianType::CpuInfoTpye(cpu_info)
             } else if message.contains("unload direction") {
-                let direction_mismatch_info = parse_direction_mismatch_info(message, time, name)?;
-                MupianInfo {
-                    cpu_info: None,
-                    direction_mismatch_info: Some(direction_mismatch_info),
-                    replenish_info: None,
-                }
+                let direction_mismatch_info = parse_direction_mismatch_info(message, name)?;
+                MupianType::DirectionMismatchInfoTpye(direction_mismatch_info)
             } else {
-                let replenish_info = parse_replenish_info(message, time, name)?;
-                MupianInfo {
-                    cpu_info: None,
-                    direction_mismatch_info: None,
-                    replenish_info: Some(replenish_info),
-                }
+                let replenish_info = parse_replenish_info(message, name)?;
+                MupianType::ReplenishInfoTpye(replenish_info)
             };
 
-            data.entry(name.to_string())
-                .or_insert(Vec::new())
-                .push(mupian_info);
+            // data.entry(name.to_string())
+            //     .or_insert(Vec::new())
+            //     .push(mupian_info);
+            data.push(MupianInfo {
+                time: parse_time(time)?,
+                mupian_type,
+            })
         }
     }
+
+    data.sort_by(|info1, info2| info1.time.cmp(&info2.time));
 
     Ok(data)
 }
 
-fn parse_cpu_info(message: &str, time: &str) -> Result<CpuInfo, String> {
+fn parse_cpu_info(message: &str) -> Result<CpuInfo, String> {
     let mut parts = message.split(',');
     let parse = |parts: &mut std::str::Split<char>, suffix: &str| {
         parts
@@ -264,7 +275,6 @@ fn parse_cpu_info(message: &str, time: &str) -> Result<CpuInfo, String> {
     let mem_used = parse(&mut parts, "MB").ok_or("parse mem used failed")?; // 第 4 段
 
     Ok(CpuInfo {
-        time: parse_time(time)?,
         cpu_usage,
         mem_usage,
         mem_used,
@@ -273,7 +283,6 @@ fn parse_cpu_info(message: &str, time: &str) -> Result<CpuInfo, String> {
 
 fn parse_direction_mismatch_info(
     message: &str,
-    time: &str,
     name: &str,
 ) -> Result<DirectionMismatchInfo, String> {
     let direction = message
@@ -286,20 +295,18 @@ fn parse_direction_mismatch_info(
         .ok_or("parse direction failed")?;
 
     Ok(DirectionMismatchInfo {
-        time: parse_time(time)?,
         result: direction > 0,
         name: name.to_string(),
     })
 }
 
-fn parse_replenish_info(message: &str, time: &str, name: &str) -> Result<ReplenishInfo, String> {
+fn parse_replenish_info(message: &str, name: &str) -> Result<ReplenishInfo, String> {
     let result = message
         .split_whitespace()
         .last()
         .ok_or("parse replenish info result failed")?;
 
     Ok(ReplenishInfo {
-        time: parse_time(time)?,
         result: result == "success",
         name: name.to_string(),
     })

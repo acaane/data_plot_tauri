@@ -28,6 +28,12 @@
 </template>
 
 <script setup lang="ts">
+enum LogType {
+    None = 0,
+    PingcheLog,
+    MupianLog,
+}
+
 interface TrainInfo {
     time: string,
     number: number | string,
@@ -37,10 +43,27 @@ interface TrainInfo {
     pos: number | string,
 }
 
-enum LogType {
-    None = 0,
-    PingcheLog,
-    MupianLog,
+interface CpuInfo {
+    cpu_usage: number;
+    mem_usage: number;
+    mem_used: number;
+}
+
+interface DirectionMismatchInfo {
+    result: boolean,
+    name: string,
+}
+
+interface ReplenishInfo {
+    result: boolean,
+    name: string,
+}
+
+interface MupianInfo {
+    time: string,
+    cpu_info: CpuInfo | null,
+    direction_mismatch_info: DirectionMismatchInfo | null,
+    replenish_info: ReplenishInfo | null,
 }
 
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -344,7 +367,317 @@ async function loadPingcheData() {
 }
 
 async function loadMupianData() {
-    console.log('loadMupianData')
+    // 调用rust函数获取数据
+    const data = await invoke('parse_mupian_data', {
+    // const data = await invoke('test1', {
+        path: logPath.value.trim()
+    })
+
+    // 检查数据是否为空
+    if (!data || Object.keys(data).length === 0) {
+        errMsg.value = '未找到有效数据'
+        loading.value = false
+        return
+    }
+
+    console.log(data)
+
+    // 转换为ECharts系列数据
+    const cpuInfo: [number, number][] = []
+    const directionInfo: [number, number][] = []
+    const replenishInfo: [number, number][] = []
+
+    data.forEach((item) => {
+        const time = parseTime(item.time)
+
+        if (item.cpu_info) {
+            cpuInfo.push([time, item.cpu_info.mem_used])
+        } else if (item.direction_mismatch_info) {
+            directionInfo.push([time, item.direction_mismatch_info.result ? 1 : 0])
+        } else if (item.replenish_info) {
+            replenishInfo.push([time, item.direction_mismatch_info.result ? 1 : 0])
+        }
+    });
+
+    // 配置图表选项
+    const option: echarts.EChartsOption = {
+        title: {
+            text: '木片小车CPU/内存占用-时间曲线',
+            left: 'center',
+            textStyle: {
+                fontSize: 20,
+                fontWeight: 'bold'
+            }
+        },
+        tooltip: {
+            trigger: 'axis',    // axis触发，同时出现当前时间线所有车厢数据
+            axisPointer: {
+                type: 'cross',
+                animation: false,
+                label: {
+                    backgroundColor: "#6a7985"
+                }
+            },
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            borderColor: '#ccc',
+            borderWidth: 1,
+            textStyle: {
+                color: '#333'
+            },
+            formatter: (params: any): string => {
+                if (!params || params.length === 0) {
+                    console.log('params为空')
+                    return ''
+                }
+
+                const time = new Date(params[0].value[0]).toLocaleString('zh-CN')
+                let result = `
+                    <div style="
+                        font-weight: bold;
+                        margin-bottom: 8px;
+                        padding-bottom: 5px;
+                        border-bottom: 1px solid #eee;
+                    ">
+                        ${time}
+                    </div>
+                `
+                // params.forEach((param: any) => {
+                //     const trainNum = param.seriesName.replace('车厢:', '')
+                //     const info = param.value[2]
+                //     result += `
+                //         <div style="margin: 3px 0;">
+                //             <span style="
+                //                 display: inline-block;
+                //                 width: 10px;
+                //                 height: 10px;
+                //                 background: ${param.color};
+                //                 border-radius: 50%;
+                //                 margin-right: 8px;
+                //             ">
+                //             </span>
+                //             <strong>车厢</strong>${trainNum}
+                //             <strong>车头:</strong>${info.head.toFixed(2)}
+                //             <strong>车尾:</strong>${info.tail.toFixed(2)}
+                //             <strong>下铲高度:</strong>${info.height.toFixed(2)}
+                //             <strong>下铲位置:</strong>${info.pos.toFixed(2)}
+                //         </div>
+                //     `
+
+                    // result += `
+                    //     <div style="margin: 3px 0;">
+                    //         <span style="
+                    //             display: inline-block;
+                    //             width: 10px;
+                    //             height: 10px;
+                    //             background: ${param.color};
+                    //             border-radius: 50%;
+                    //             margin-right: 8px;
+                    //         ">
+                    //         </span>
+                    //         <strong>车厢</strong>${trainNum}
+                    //         <strong>车头:</strong>${info.head.toFixed(2)}
+                    //         <strong>车尾:</strong>${info.tail.toFixed(2)}
+                    //         <strong>下铲高度:</strong>${info.height.toFixed(2)}
+                    //         <strong>下铲位置:</strong>${info.pos.toFixed(2)}
+                    //     </div>
+                    // `
+                // })
+
+                return result
+            }
+        },
+        legend: {
+            type: 'scroll',
+            orient: 'vertical',
+            right: 10,
+            top: 60,
+            bottom: 20,
+            textStyle: {
+                fontSize: 12
+            },
+            pageIconColor: '#409eff',
+            pageTextStyle: {
+                color: '#666'
+            }
+        },
+        grid: {
+            left: '3%',
+            right: '15%',
+            bottom: '15%',
+            top: '15%',
+            containLabel: true
+        },
+        toolbox: {
+            feature: {
+                dataZoom: {
+                    yAxisIndex: 'none',
+                    title: {
+                        zoom: '区域缩放',
+                        back: '缩放还原'
+                    }
+                },
+                restore: {
+                    title: '还原'
+                },
+                saveAsImage: {
+                    title: '保存为图片',
+                    backgroundColor: '#fff'
+                }
+            },
+            right: 20,
+            top: 20,
+            iconStyle: {
+                borderColor: '#409eff'
+            },
+            emphasis: {
+                iconStyle: {
+                    borderColor: '#66b1ff'
+                }
+            }
+        },
+        xAxis: {
+            type: 'time',
+            name: '时间',
+            nameLocation: 'middle',
+            nameGap: 30,
+            boundaryGap: false,
+            axisLine: {
+                lineStyle: {
+                    color: '#333'
+                }
+            },
+            axisLabel: {
+                formatter: (value: number) => {
+                    const date = new Date(value)
+                    const yy = date.getFullYear().toString().padStart(4, '0')
+                    const MM = (date.getMonth() + 1).toString().padStart(2, '0')
+                    const dd = (date.getDate()).toString().padStart(2, '0')
+                    const hh = (date.getHours()).toString().padStart(2, '0')
+                    const mm = (date.getMinutes()).toString().padStart(2, '0')
+                    const ss = (date.getSeconds()).toString().padStart(2, '0')
+                    return `${yy}/${MM}/${dd} ${hh}:${mm}:${ss}`
+                },
+                rotate: 45,
+                color: '#666'
+            }
+        } as any,
+        yAxis: {
+            type: "value",
+            name: '值',
+            nameLocation: 'middle',
+            nameGap: 50,
+            axisLine: {
+                lineStyle: {
+                    color: '#333'
+                }
+            },
+            axisLabel: {
+                color: '#666'
+            }
+        },
+        dataZoom: [
+            {
+                type: 'inside',
+                start: 0,
+                end: 100
+            },
+            {
+                start: 0,
+                end: 100,
+                height: 30,
+                bottom: 20,
+                handleStyle: {
+                    color: '#409eff'
+                },
+                textStyle: {
+                    color: '#666'
+                },
+            }
+        ],
+
+        series: [
+            {
+                name: '内存使用量(MB)',
+                type: 'line',
+                data: cpuInfo,
+                smooth: true,
+                showSymbol: false,
+                emphasis: {
+                    focus: 'series',
+                    linsStyle: {
+                        width: 4
+                    },
+                } as any,
+            },
+            {
+                name: '方向匹配结果',
+                type: 'line',
+                data: directionInfo,
+                step: 'middle',
+                showSymbol: false,
+                emphasis: {
+                    focus: 'series',
+                    linsStyle: {
+                        width: 4
+                    },
+                } as any,
+            },
+            {
+                name: '补料完成结果',
+                type: 'line',
+                data: replenishInfo,
+                step: 'middle',
+                showSymbol: false,
+                emphasis: {
+                    focus: 'series',
+                    linsStyle: {
+                        width: 4
+                    },
+                } as any,
+            }
+        ]
+
+    // const series = Object
+    //     .entries(data)
+    //     .map(([trainNum, records]) => {
+    //         // 按时间排序
+    //         const sorted: [number, number, TrainInfo] = records
+    //             .map((record: TrainInfo) => [
+    //                 parseTime(record.time), // x轴数据
+    //                 record.head,            // y轴数据
+    //                 record                  // 要显示的数据
+    //             ] as [number, number, TrainInfo])
+    //             .sort((a: any, b: any) => a[0] - b[0])
+
+    //         return {
+    //             name: `车厢:${trainNum}`,
+    //             type: 'line',
+    //             data: sorted,
+    //             smooth: true,
+    //             showSymbol: false,
+    //             emphasis: {
+    //                 focus: 'series',
+    //                 linsStyle: {
+    //                     width: 4
+    //                 },
+    //             },
+    //         }
+    //     })
+
+    
+    //     series: series.map(s => ({
+    //         ...s,
+    //         smooth: true,
+    //         showSymbol: false
+    //     })) as any
+    }
+
+    // 渲染图表
+    if (!chartInstance) {
+        chartInstance = echarts.init(chart.value!)
+    }
+
+    chartInstance.setOption(option, true)
 }
 
 async function loadData() {
@@ -354,13 +687,13 @@ async function loadData() {
     }
 
     loading.value = true
-    errMsg.value = ''
+    // errMsg.value = ''
 
     try {
         if (logType === LogType.PingcheLog) {
-            loadPingcheData()
+            await loadPingcheData()
         } else if (logType === LogType.MupianLog) {
-            loadMupianData()
+            await loadMupianData()
         }
 
         // 响应式调整
@@ -371,6 +704,7 @@ async function loadData() {
         console.error(`加载数据失败:${e}`)
         errMsg.value = `加载数据失败:${e.message || e}`
     } finally {
+        console.log('loadPingcheData finished')
         loading.value = false
     }
 }
