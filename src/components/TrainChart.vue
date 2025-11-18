@@ -104,7 +104,6 @@ async function selectFile() {
 
             // 获取文件名，并根据文件名判断日志对应项目
             let fileName = selected.split(/[\\/]/).pop() ?? ''
-            console.log(fileName)
             if (fileName.includes('pingche_log')) {
                 logType = LogType.PingcheLog
                 errMsg.value = '平车机日志'
@@ -380,24 +379,43 @@ async function loadMupianData() {
         return
     }
 
-    console.log(data)
+    // console.log(data)
 
     // 转换为ECharts系列数据
-    const cpuInfo: [number, number][] = []
-    const directionInfo: [number, number][] = []
-    const replenishInfo: [number, number][] = []
+    const cpuInfo = new Map<number, any>();
+    const memInfo = new Map<number, any>();
+    const directionInfo = new Map<number, any>();
+    const replenishInfo = new Map<number, any>();
 
-    data.forEach((item) => {
+    const cpuData: [number, number][] = []
+    const memData: [number, number][] = []
+    const directionData: [number, number][] = []
+    const replenishData: [number, number][] = []
+
+    Object.values(data).forEach((item) => {
         const time = parseTime(item.time)
-
-        if (item.cpu_info) {
-            cpuInfo.push([time, item.cpu_info.mem_used])
-        } else if (item.direction_mismatch_info) {
-            directionInfo.push([time, item.direction_mismatch_info.result ? 1 : 0])
-        } else if (item.replenish_info) {
-            replenishInfo.push([time, item.direction_mismatch_info.result ? 1 : 0])
+        const mupianType = item.mupian_type as any
+        const key = Object.keys(mupianType)[0]
+        const value = mupianType[key]
+        switch (key) {
+        case 'CpuInfoTpye':
+            cpuInfo.set(time, value.cpu_usage);
+            cpuData.push([time, value.cpu_usage / 100])
+            memInfo.set(time, [value.mem_usage, value.mem_used])
+            memData.push([time, value.mem_usage / 100])
+            break;
+        case 'DirectionMismatchInfoTpye':
+            directionInfo.set(time, value)
+            directionData.push([time, value.result ? 1 : 0])
+            break;
+        case 'ReplenishInfoTpye':
+            replenishInfo.set(time, value)
+            replenishData.push([time, value.result ? 1 : 0])
+            break;
+        default:
+            break;
         }
-    });
+    })
 
     // 配置图表选项
     const option: echarts.EChartsOption = {
@@ -430,7 +448,12 @@ async function loadMupianData() {
                     return ''
                 }
 
-                const time = new Date(params[0].value[0]).toLocaleString('zh-CN')
+                const time = params[0].value[0] as number
+                const timeStr = new Date(time).toLocaleString('zh-CN')
+                const cpu = cpuInfo.get(time)
+                const mem = memInfo.get(time)
+                const direction = directionInfo.get(time)
+                const replenish = replenishInfo.get(time)
                 let result = `
                     <div style="
                         font-weight: bold;
@@ -438,50 +461,72 @@ async function loadMupianData() {
                         padding-bottom: 5px;
                         border-bottom: 1px solid #eee;
                     ">
-                        ${time}
+                        ${timeStr}
                     </div>
                 `
-                // params.forEach((param: any) => {
-                //     const trainNum = param.seriesName.replace('车厢:', '')
-                //     const info = param.value[2]
-                //     result += `
-                //         <div style="margin: 3px 0;">
-                //             <span style="
-                //                 display: inline-block;
-                //                 width: 10px;
-                //                 height: 10px;
-                //                 background: ${param.color};
-                //                 border-radius: 50%;
-                //                 margin-right: 8px;
-                //             ">
-                //             </span>
-                //             <strong>车厢</strong>${trainNum}
-                //             <strong>车头:</strong>${info.head.toFixed(2)}
-                //             <strong>车尾:</strong>${info.tail.toFixed(2)}
-                //             <strong>下铲高度:</strong>${info.height.toFixed(2)}
-                //             <strong>下铲位置:</strong>${info.pos.toFixed(2)}
-                //         </div>
-                //     `
-
-                    // result += `
-                    //     <div style="margin: 3px 0;">
-                    //         <span style="
-                    //             display: inline-block;
-                    //             width: 10px;
-                    //             height: 10px;
-                    //             background: ${param.color};
-                    //             border-radius: 50%;
-                    //             margin-right: 8px;
-                    //         ">
-                    //         </span>
-                    //         <strong>车厢</strong>${trainNum}
-                    //         <strong>车头:</strong>${info.head.toFixed(2)}
-                    //         <strong>车尾:</strong>${info.tail.toFixed(2)}
-                    //         <strong>下铲高度:</strong>${info.height.toFixed(2)}
-                    //         <strong>下铲位置:</strong>${info.pos.toFixed(2)}
-                    //     </div>
-                    // `
-                // })
+                params.forEach((param: any) => {
+                    // if (cpu) {
+                    if (param.seriesName === 'CPU使用率(%)') {
+                        result += `
+                            <div style="margin: 3px 0;">
+                                <span style="
+                                    display: inline-block;
+                                    width: 10px;
+                                    height: 10px;
+                                    background: ${param.color};
+                                    border-radius: 50%;
+                                    margin-right: 8px;
+                                ">
+                                </span>
+                                <strong>CPU使用率:</strong>${cpu.toFixed(2)}%
+                        `
+                    } else if (param.seriesName === '内存使用率(%)') {
+                        result += `
+                            <div style="margin: 3px 0;">
+                                <span style="
+                                    display: inline-block;
+                                    width: 10px;
+                                    height: 10px;
+                                    background: ${param.color};
+                                    border-radius: 50%;
+                                    margin-right: 8px;
+                                ">
+                                </span>
+                                <strong>内存使用率:</strong>${mem[0].toFixed(2)}%
+                                <strong>内存占用:</strong>${mem[1].toFixed(2)}MB
+                        `
+                    } else if (param.seriesName === '方向匹配结果') {
+                        result += `
+                            <div style="margin: 3px 0;">
+                                <span style="
+                                    display: inline-block;
+                                    width: 10px;
+                                    height: 10px;
+                                    background: ${param.color};
+                                    border-radius: 50%;
+                                    margin-right: 8px;
+                                ">
+                                </span>
+                                <strong>设备名:</strong>${direction.name}
+                                <strong>结果:</strong>${direction.result ? '方向匹配成功' : '方向匹配失败'}
+                        ` 
+                    } else if (param.seriesName === '补料完成结果') {
+                        result += `
+                            <div style="margin: 3px 0;">
+                                <span style="
+                                    display: inline-block;
+                                    width: 10px;
+                                    height: 10px;
+                                    background: ${param.color};
+                                    border-radius: 50%;
+                                    margin-right: 8px;
+                                ">
+                                </span>
+                                <strong>设备名:</strong>${replenish.name}
+                                <strong>结果:</strong>${replenish.result ? '补垛成功' : '补垛失败'}
+                        ` 
+                    }
+                })
 
                 return result
             }
@@ -597,9 +642,22 @@ async function loadMupianData() {
 
         series: [
             {
-                name: '内存使用量(MB)',
+                name: 'CPU使用率(%)',
                 type: 'line',
-                data: cpuInfo,
+                data: cpuData,
+                smooth: true,
+                showSymbol: false,
+                emphasis: {
+                    focus: 'series',
+                    linsStyle: {
+                        width: 4
+                    },
+                } as any,
+            },
+            {
+                name: '内存使用率(%)',
+                type: 'line',
+                data: memData,
                 smooth: true,
                 showSymbol: false,
                 emphasis: {
@@ -612,7 +670,7 @@ async function loadMupianData() {
             {
                 name: '方向匹配结果',
                 type: 'line',
-                data: directionInfo,
+                data: directionData,
                 step: 'middle',
                 showSymbol: false,
                 emphasis: {
@@ -625,7 +683,7 @@ async function loadMupianData() {
             {
                 name: '补料完成结果',
                 type: 'line',
-                data: replenishInfo,
+                data: replenishData,
                 step: 'middle',
                 showSymbol: false,
                 emphasis: {
@@ -704,7 +762,6 @@ async function loadData() {
         console.error(`加载数据失败:${e}`)
         errMsg.value = `加载数据失败:${e.message || e}`
     } finally {
-        console.log('loadPingcheData finished')
         loading.value = false
     }
 }

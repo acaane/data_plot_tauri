@@ -211,16 +211,36 @@ fn parse_mupian_data(path: String) -> Result<Vec<MupianInfo>, String> {
 
     let mut data = Vec::new();
 
-    for line in buf.lines().skip(700).take(200) {
+    for line in buf.lines() {
+    // for line in buf.lines().skip(0).take(1000) {
         if line.contains("cpu usage")
             || (line.contains("unload direction") && line.contains("match with"))
             || line.contains("send replenish finish")
         {
-            let parts = line.splitn(4, ']').collect::<Vec<_>>();
+            let mut parts = line
+                .rsplit(']')
+                .take(4)
+                .collect::<Vec<_>>();
+            if parts.len() < 4 {
+                continue;
+            }
+            parts.reverse();
             let time = parts[0]
-                .strip_prefix('[')
+                .rsplit('[')
+                .collect::<Vec<_>>()
+                .get(0)
                 .ok_or("Missing time in line")?
                 .trim();
+            if time.len() != 23 {
+                continue;
+            }
+            let time = match parse_time(time) {
+                Ok(t) => t,
+                Err(e) => {
+                    println!("{e}:{time}");
+                    continue;
+                },
+            };
             let _level = parts[1]
                 .strip_prefix(" [")
                 .ok_or("Missing level in line")?
@@ -246,7 +266,7 @@ fn parse_mupian_data(path: String) -> Result<Vec<MupianInfo>, String> {
             //     .or_insert(Vec::new())
             //     .push(mupian_info);
             data.push(MupianInfo {
-                time: parse_time(time)?,
+                time,
                 mupian_type,
             })
         }
@@ -258,8 +278,8 @@ fn parse_mupian_data(path: String) -> Result<Vec<MupianInfo>, String> {
 }
 
 fn parse_cpu_info(message: &str) -> Result<CpuInfo, String> {
-    let mut parts = message.split(',');
-    let parse = |parts: &mut std::str::Split<char>, suffix: &str| {
+    let mut parts = message.split(", ");
+    let parse = |parts: &mut std::str::Split<&str>, suffix: &str| {
         parts
             .next()
             .and_then(|s| {
