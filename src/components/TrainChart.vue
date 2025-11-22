@@ -779,13 +779,17 @@ onMounted(() => {
     // 监听文件拖拽事件
     listen(TauriEvent.DRAG_DROP, async (event) => {
         if (event.event === 'tauri://drag-drop') {
-            const payload = event.payload
-            const paths = payload.paths
-            if (paths && paths.length > 0) {
-                const path = paths[0]
-                logPath.value = path
-                // 根据文件名判断日志对应项目
-                checkLogType(path)
+            try {
+                const payload = event.payload
+                const paths = payload.paths
+                if (paths && paths.length > 0) {
+                    const path = paths[0]
+                    logPath.value = path
+                    // 根据文件名判断日志对应项目
+                    checkLogType(path)
+                }
+            } catch (e: any) {
+                errMsg.value = `文件拖拽失败:${e.message || e}`
             }
         }
     })
