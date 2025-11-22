@@ -1,5 +1,5 @@
 <template>
-    <div class="container">
+    <div class="container" @dragover.prevent @drop.prevent>
         <h1 class="page-title">数据可视化</h1>
         <div class="header">
             <div class="controls">
@@ -70,6 +70,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { listen, TauriEvent } from '@tauri-apps/api/event';
 
 const chart = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
@@ -84,6 +85,18 @@ let logType = LogType.None
 // 转换时间字符串为时间戳
 let parseTime = (time: string): number => {
     return new Date(time).getTime() - timezoneOffset
+}
+
+// 判断日志类型
+function checkLogType(path: string) {
+    let fileName = path.split(/[\\/]/).pop() ?? ''
+    if (fileName.includes('pingche_log')) {
+        logType = LogType.PingcheLog
+        errMsg.value = '平车机日志'
+    } else if (fileName.includes('unload_log')) {
+        logType = LogType.MupianLog
+        errMsg.value = '木片小车日志'
+    }
 }
 
 // 选择文件
@@ -102,15 +115,8 @@ async function selectFile() {
             logPath.value = selected
             selecting.value = false
 
-            // 获取文件名，并根据文件名判断日志对应项目
-            let fileName = selected.split(/[\\/]/).pop() ?? ''
-            if (fileName.includes('pingche_log')) {
-                logType = LogType.PingcheLog
-                errMsg.value = '平车机日志'
-            } else if (fileName.includes('unload_log')) {
-                logType = LogType.MupianLog
-                errMsg.value = '木片小车日志'
-            }
+            // 根据文件名判断日志对应项目
+            checkLogType(selected)
         }
     } catch (e: any) {
         errMsg.value = `选择文件失败:${e.message}`
@@ -770,7 +776,19 @@ async function loadData() {
 onMounted(() => {
     chartInstance = echarts.init(chart.value!)
 
-    // 可以自动加载数据，或等待用户点击
+    // 监听文件拖拽事件
+    listen(TauriEvent.DRAG_DROP, async (event) => {
+        if (event.event === 'tauri://drag-drop') {
+            const payload = event.payload
+            const paths = payload.paths
+            if (paths && paths.length > 0) {
+                const path = paths[0]
+                logPath.value = path
+                // 根据文件名判断日志对应项目
+                checkLogType(path)
+            }
+        }
+    })
 })
 
 // 组件卸载时销毁图标
