@@ -75,6 +75,12 @@ interface SuidongInfo {
     raw_fields: Record<string, string>
 }
 
+interface SuidongFieldMeta {
+    key: string
+    kind: 'number' | 'boolean'
+    defaultVisible: boolean
+}
+
 const chart = ref<HTMLDivElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 let removeDragDropListener: null | (() => void) = null
@@ -89,14 +95,18 @@ const showWest = ref(true)
 const suidongData = ref<SuidongInfo[]>([])
 
 const timezoneOffset = 8 * 60 * 60 * 1000
-const coreSuidongFields = new Set([
-    'isValidDistance',
+const suidongCoreFieldOrder = [
     'trainDistance',
-    'isHeightUpdated',
     'avgHeight',
-])
+    'isValidDistance',
+    'isHeightUpdated',
+] as const
+const coreSuidongFields = new Set(suidongCoreFieldOrder)
+const eastColorPalette = ['#2563eb', '#16a34a', '#1d4ed8', '#15803d', '#0ea5e9', '#7c3aed', '#0891b2']
+const westColorPalette = ['#f59e0b', '#ef4444', '#d97706', '#dc2626', '#f97316', '#e11d48', '#ca8a04']
 
 let logType = LogType.None
+let suidongLegendSelected: Record<string, boolean> = {}
 
 function parseTime(time: string): number {
     return new Date(time).getTime() - timezoneOffset
@@ -125,6 +135,106 @@ function toSideLabel(side: string): string {
     return side.toLowerCase() === 'east' ? 'east' : 'west'
 }
 
+function getSuidongFieldKind(value: string): 'number' | 'boolean' | null {
+    if (value === 'true' || value === 'false') {
+        return 'boolean'
+    }
+
+    return Number.isFinite(Number(value)) ? 'number' : null
+}
+
+function buildSuidongFieldMetas(data: SuidongInfo[]): SuidongFieldMeta[] {
+    const kindMap = new Map<string, 'number' | 'boolean'>()
+
+    data.forEach((item) => {
+        Object.entries(item.raw_fields).forEach(([key, value]) => {
+            const kind = getSuidongFieldKind(value)
+            if (!kind) {
+                return
+            }
+
+            const currentKind = kindMap.get(key)
+            if (!currentKind) {
+                kindMap.set(key, kind)
+            } else if (currentKind !== kind) {
+                kindMap.delete(key)
+            }
+        })
+    })
+
+    suidongCoreFieldOrder.forEach((key) => {
+        if (!kindMap.has(key)) {
+            kindMap.set(key, key.startsWith('is') ? 'boolean' : 'number')
+        }
+    })
+
+    const sortedKeys = Array.from(kindMap.keys()).sort((a, b) => {
+        const aIndex = suidongCoreFieldOrder.indexOf(a as typeof suidongCoreFieldOrder[number])
+        const bIndex = suidongCoreFieldOrder.indexOf(b as typeof suidongCoreFieldOrder[number])
+
+        if (aIndex !== -1 || bIndex !== -1) {
+            if (aIndex === -1) {
+                return 1
+            }
+            if (bIndex === -1) {
+                return -1
+            }
+            return aIndex - bIndex
+        }
+
+        return a.localeCompare(b)
+    })
+
+    return sortedKeys.map((key) => ({
+        key,
+        kind: kindMap.get(key) as 'number' | 'boolean',
+        defaultVisible: coreSuidongFields.has(key),
+    }))
+}
+
+function getSuidongFieldValue(item: SuidongInfo, field: SuidongFieldMeta): number | null {
+    const rawValue = item.raw_fields[field.key]
+
+    if (field.kind === 'boolean') {
+        if (rawValue === 'true') {
+            return 1
+        }
+        if (rawValue === 'false') {
+            return 0
+        }
+
+        if (field.key === 'isValidDistance') {
+            return item.is_valid_distance === null ? null : (item.is_valid_distance ? 1 : 0)
+        }
+        if (field.key === 'isHeightUpdated') {
+            return item.is_height_updated === null ? null : (item.is_height_updated ? 1 : 0)
+        }
+
+        return null
+    }
+
+    if (rawValue !== undefined) {
+        const num = Number(rawValue)
+        if (Number.isFinite(num)) {
+            return num
+        }
+    }
+
+    if (field.key === 'trainDistance') {
+        return item.train_distance
+    }
+    if (field.key === 'avgHeight') {
+        return item.avg_height
+    }
+
+    return null
+}
+
+function getSuidongSeriesColor(side: string, index: number): string {
+    const palette = side === 'east' ? eastColorPalette : westColorPalette
+    return palette[index % palette.length]
+}
+
 function ensureChart() {
     if (!chartInstance && chart.value) {
         chartInstance = echarts.init(chart.value)
@@ -136,6 +246,7 @@ function createBaseOption(
     yAxis: echarts.EChartsOption['yAxis'],
     series: echarts.SeriesOption[],
     formatter: (params: any[]) => string,
+    legendSelected?: Record<string, boolean>,
 ): echarts.EChartsOption {
     return {
         title: {
@@ -169,6 +280,7 @@ function createBaseOption(
             right: 10,
             top: 60,
             bottom: 20,
+            selected: legendSelected,
             textStyle: {
                 fontSize: 12,
             },
@@ -551,88 +663,17 @@ function renderSuidongChart() {
     }
 
     const filteredData = suidongData.value.filter((item) => visibleSides.has(item.side))
+    const fieldMetas = buildSuidongFieldMetas(suidongData.value)
+    const legendSelected: Record<string, boolean> = {}
+    const series: echarts.SeriesOption[] = []
 
-    const seriesDefs = [
-        {
-            side: 'east',
-            key: 'train_distance',
-            label: 'east trainDistance',
-            color: '#2563eb',
-            yAxisIndex: 0,
-        },
-        {
-            side: 'east',
-            key: 'avg_height',
-            label: 'east avgHeight',
-            color: '#16a34a',
-            yAxisIndex: 0,
-        },
-        {
-            side: 'east',
-            key: 'is_valid_distance',
-            label: 'east isValidDistance',
-            color: '#1d4ed8',
-            yAxisIndex: 1,
-            step: 'end',
-        },
-        {
-            side: 'east',
-            key: 'is_height_updated',
-            label: 'east isHeightUpdated',
-            color: '#15803d',
-            yAxisIndex: 1,
-            step: 'end',
-        },
-        {
-            side: 'west',
-            key: 'train_distance',
-            label: 'west trainDistance',
-            color: '#f59e0b',
-            yAxisIndex: 0,
-        },
-        {
-            side: 'west',
-            key: 'avg_height',
-            label: 'west avgHeight',
-            color: '#ef4444',
-            yAxisIndex: 0,
-        },
-        {
-            side: 'west',
-            key: 'is_valid_distance',
-            label: 'west isValidDistance',
-            color: '#d97706',
-            yAxisIndex: 1,
-            step: 'end',
-        },
-        {
-            side: 'west',
-            key: 'is_height_updated',
-            label: 'west isHeightUpdated',
-            color: '#dc2626',
-            yAxisIndex: 1,
-            step: 'end',
-        },
-    ]
-
-    const series = seriesDefs
-        .filter((def) => visibleSides.has(def.side))
-        .map((def) => {
+    fieldMetas.forEach((field, fieldIndex) => {
+        Array.from(visibleSides).forEach((side) => {
+            const seriesName = `${toSideLabel(side)} ${field.key}`
             const data = filteredData
-                .filter((item) => item.side === def.side)
+                .filter((item) => item.side === side)
                 .map((item) => {
-                    let value: number | null = null
-
-                    if (def.key === 'train_distance') {
-                        value = item.train_distance
-                    } else if (def.key === 'avg_height') {
-                        value = item.avg_height
-                    } else if (def.key === 'is_valid_distance') {
-                        value = item.is_valid_distance === null ? null : (item.is_valid_distance ? 1 : 0)
-                    } else if (def.key === 'is_height_updated') {
-                        value = item.is_height_updated === null ? null : (item.is_height_updated ? 1 : 0)
-                    }
-
+                    const value = getSuidongFieldValue(item, field)
                     if (value === null) {
                         return null
                     }
@@ -641,20 +682,30 @@ function renderSuidongChart() {
                 })
                 .filter((item): item is [number, number, SuidongInfo] => item !== null)
 
-            return {
-                name: def.label,
+            if (data.length === 0) {
+                return
+            }
+
+            if (suidongLegendSelected[seriesName] === undefined) {
+                suidongLegendSelected[seriesName] = field.defaultVisible
+            }
+            legendSelected[seriesName] = suidongLegendSelected[seriesName]
+
+            const color = getSuidongSeriesColor(side, fieldIndex)
+            series.push({
+                name: seriesName,
                 type: 'line',
-                yAxisIndex: def.yAxisIndex,
+                yAxisIndex: field.kind === 'number' ? 0 : 1,
                 data,
-                smooth: def.yAxisIndex === 0,
-                step: def.step,
+                smooth: field.kind === 'number',
+                step: field.kind === 'boolean' ? 'end' : undefined,
                 showSymbol: false,
                 lineStyle: {
                     width: 2,
-                    color: def.color,
+                    color,
                 },
                 itemStyle: {
-                    color: def.color,
+                    color,
                 },
                 emphasis: {
                     focus: 'series',
@@ -662,8 +713,9 @@ function renderSuidongChart() {
                         width: 4,
                     },
                 },
-            }
+            })
         })
+    })
 
     const option = createBaseOption(
         '随动PLC写入信息-时间曲线',
@@ -726,8 +778,9 @@ function renderSuidongChart() {
             sideMap.forEach((item, side) => {
                 const extraFields = Object.entries(item.raw_fields)
                     .filter(([key]) => !coreSuidongFields.has(key))
-                    .map(([key, value]) => `${key}:${value}`)
-                    .join(' ')
+                    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+                    .map(([key, value]) => `<div>${key}: ${value}</div>`)
+                    .join('')
 
                 result += `
                     <div style="margin: 6px 0; padding: 6px 0; border-bottom: 1px dashed #eee;">
@@ -736,13 +789,14 @@ function renderSuidongChart() {
                         <div>trainDistance: ${item.train_distance ?? '--'}</div>
                         <div>isHeightUpdated: ${formatBool(item.is_height_updated)}</div>
                         <div>avgHeight: ${item.avg_height ?? '--'}</div>
-                        ${extraFields ? `<div>扩展字段: ${extraFields}</div>` : ''}
+                        ${extraFields ? `<div style="margin-top: 4px;"><strong>扩展字段</strong></div>${extraFields}` : ''}
                     </div>
                 `
             })
 
             return result
         },
+        legendSelected,
     )
 
     chartInstance?.setOption(option, true)
@@ -800,6 +854,12 @@ onMounted(async () => {
     ensureChart()
     checkLogType(logPath.value)
     window.addEventListener('resize', handleResize)
+    chartInstance?.on('legendselectchanged', (event: any) => {
+        suidongLegendSelected = {
+            ...suidongLegendSelected,
+            ...event.selected,
+        }
+    })
 
     removeDragDropListener = await listen(TauriEvent.DRAG_DROP, (event) => {
         if (event.event !== 'tauri://drag-drop') {
