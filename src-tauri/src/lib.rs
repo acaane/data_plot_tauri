@@ -28,6 +28,7 @@ pub fn run() {
             greet,
             parse_data,
             parse_mupian_data,
+            parse_suidong_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -142,6 +143,19 @@ mod tests {
 
         assert!(!data.is_empty());
     }
+
+    #[test]
+    fn test_parse_suidong_data() {
+        let path = "../test_files/2026.04.28/suidong_log.log".to_string();
+        let data = parse_suidong_data(path).unwrap();
+
+        assert!(!data.is_empty());
+        assert!(data.iter().any(|item| item.side == "east"));
+        assert!(data.iter().any(|item| item.side == "west"));
+        assert!(data
+            .iter()
+            .any(|item| item.raw_fields.contains_key("avgHeightVariance")));
+    }
 }
 
 fn parse_time(time: &str) -> Result<DateTime<Utc>, String> {
@@ -200,6 +214,17 @@ enum MupianType {
 struct MupianInfo {
     time: DateTime<Utc>,
     mupian_type: MupianType,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SuidongInfo {
+    time: DateTime<Utc>,
+    side: String,
+    is_valid_distance: Option<bool>,
+    train_distance: Option<f64>,
+    is_height_updated: Option<bool>,
+    avg_height: Option<f64>,
+    raw_fields: HashMap<String, String>,
 }
 
 #[tauri::command]
@@ -330,4 +355,93 @@ fn parse_replenish_info(message: &str, name: &str) -> Result<ReplenishInfo, Stri
         result: result == "success",
         name: name.to_string(),
     })
+}
+
+#[tauri::command]
+fn parse_suidong_data(path: String) -> Result<Vec<SuidongInfo>, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+
+    let mut data = Vec::new();
+
+    for line in buf.lines() {
+        if !line.contains("plc write info:") {
+            continue;
+        }
+
+        let mut parts = line.rsplit(']').take(4).collect::<Vec<_>>();
+        if parts.len() < 4 {
+            continue;
+        }
+        parts.reverse();
+
+        let time = parts[0]
+            .rsplit('[')
+            .collect::<Vec<_>>()
+            .get(0)
+            .ok_or("Missing time in line")?
+            .trim();
+        if time.len() != 23 {
+            continue;
+        }
+        let time = match parse_time(time) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("{e}:{time}");
+                continue;
+            }
+        };
+
+        let side = parts[2]
+            .strip_prefix(" [")
+            .ok_or("Missing side in line")?
+            .trim();
+        if side != "east" && side != "west" {
+            continue;
+        }
+
+        let message = parts[3].trim();
+        let payload = message
+            .strip_prefix("plc write info:")
+            .ok_or("Missing plc write info payload")?
+            .trim();
+        let raw_fields = parse_key_value_fields(payload);
+
+        data.push(SuidongInfo {
+            time,
+            side: side.to_string(),
+            is_valid_distance: parse_bool_field(&raw_fields, "isValidDistance"),
+            train_distance: parse_f64_field(&raw_fields, "trainDistance"),
+            is_height_updated: parse_bool_field(&raw_fields, "isHeightUpdated"),
+            avg_height: parse_f64_field(&raw_fields, "avgHeight"),
+            raw_fields,
+        });
+    }
+
+    data.sort_by(|info1, info2| info1.time.cmp(&info2.time));
+
+    Ok(data)
+}
+
+fn parse_key_value_fields(message: &str) -> HashMap<String, String> {
+    message
+        .split_whitespace()
+        .filter_map(|part| {
+            let (key, value) = part.split_once(':')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn parse_bool_field(fields: &HashMap<String, String>, key: &str) -> Option<bool> {
+    fields.get(key).and_then(|value| match value.as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    })
+}
+
+fn parse_f64_field(fields: &HashMap<String, String>, key: &str) -> Option<f64> {
+    fields.get(key).and_then(|value| value.parse::<f64>().ok())
 }
