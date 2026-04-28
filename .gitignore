@@ -25,3 +25,6 @@ dist-ssr
 
 # Test files
 test_files
+
+# AI
+AGENTS.md
