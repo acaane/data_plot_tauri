@@ -112,7 +112,7 @@ function parseTime(time: string): number {
     return new Date(time).getTime() - timezoneOffset
 }
 
-function formatAxisTime(value: number): string {
+function formatTimeWithMilliseconds(value: number, includeDate = true): string {
     const date = new Date(value)
     const yy = date.getFullYear().toString().padStart(4, '0')
     const MM = (date.getMonth() + 1).toString().padStart(2, '0')
@@ -120,7 +120,13 @@ function formatAxisTime(value: number): string {
     const hh = date.getHours().toString().padStart(2, '0')
     const mm = date.getMinutes().toString().padStart(2, '0')
     const ss = date.getSeconds().toString().padStart(2, '0')
-    return `${yy}/${MM}/${dd} ${hh}:${mm}:${ss}`
+    const ms = date.getMilliseconds().toString().padStart(3, '0')
+
+    if (!includeDate) {
+        return `${hh}:${mm}:${ss}.${ms}`
+    }
+
+    return `${yy}/${MM}/${dd} ${hh}:${mm}:${ss}.${ms}`
 }
 
 function formatBool(value: boolean | null): string {
@@ -336,7 +342,7 @@ function createBaseOption(
                 },
             },
             axisLabel: {
-                formatter: (value: number) => formatAxisTime(value),
+                formatter: (value: number) => formatTimeWithMilliseconds(value, false),
                 rotate: 45,
                 color: '#666',
             },
@@ -759,7 +765,7 @@ function renderSuidongChart() {
                 return ''
             }
 
-            const time = new Date(params[0].value[0]).toLocaleString('zh-CN')
+            const time = formatTimeWithMilliseconds(params[0].value[0], true)
             const sideMap = new Map<string, SuidongInfo>()
 
             params.forEach((param) => {
