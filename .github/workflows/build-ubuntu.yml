@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: lts/*
 
@@ -36,9 +36,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Ubuntu bundles
-        uses: tauri-apps/tauri-action@action-v0.6.2
+        run: pnpm tauri build -- --bundles deb,appimage
+
+      - name: Upload Ubuntu bundles
+        uses: actions/upload-artifact@v7
         with:
-          tauriScript: pnpm tauri
-          args: --bundles deb,appimage
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: ubuntu-[arch]-[bundle]
+          name: ubuntu-bundles
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.AppImage
